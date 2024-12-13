@@ -59,6 +59,16 @@ export class WAMonitoringService {
     }
   }
 
+  public async instanceProfile(instanceName: string) {
+    const instance = await this.prismaRepository.instance.findFirst({ where: { name: instanceName } });
+
+    if (instanceName && !instance && !this.waInstances[instanceName]) {
+      throw new NotFoundException(`Instance "${instanceName}" not found`);
+    }
+
+    return instance;
+  }
+
   public async instanceInfo(instanceNames?: string[]): Promise<any> {
     if (instanceNames && instanceNames.length > 0) {
       const inexistentInstances = instanceNames ? instanceNames.filter((instance) => !this.waInstances[instance]) : [];
@@ -72,14 +82,15 @@ export class WAMonitoringService {
 
     const clientName = this.configService.get<Database>('DATABASE').CONNECTION.CLIENT_NAME;
 
-    const where = instanceNames && instanceNames.length > 0
-      ? {
-        name: {
-          in: instanceNames,
-        },
-        clientName,
-      }
-      : { clientName };
+    const where =
+      instanceNames && instanceNames.length > 0
+        ? {
+            name: {
+              in: instanceNames,
+            },
+            clientName,
+          }
+        : { clientName };
 
     const instances = await this.prismaRepository.instance.findMany({
       where,

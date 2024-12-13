@@ -4278,6 +4278,11 @@ export class BaileysStartupService extends ChannelStartupService {
   private async updateMessagesReadedByTimestamp(remoteJid: string, timestamp?: number): Promise<number> {
     if (timestamp === undefined || timestamp === null) return 0;
 
+    // Desabilitar a atualização de mensagens lidas
+    if (remoteJid) {
+      return 0;
+    }
+
     const result = await this.prismaRepository.message.updateMany({
       where: {
         AND: [

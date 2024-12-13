@@ -8,18 +8,9 @@ services:
       - 8080:8080
     volumes:
       - evolution_instances:/evolution/instances
-    networks:
-      - evolution-net
     env_file:
       - .env
-    expose:
-      - 8080
 
 volumes:
   evolution_instances:
 
-
-networks:
-  evolution-net:
-    name: evolution-net
-    driver: bridge

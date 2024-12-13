@@ -1,0 +1,17 @@
+services:
+  postgres:
+    image: postgres
+    restart: always
+    ports:
+      - '5438:5432'
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=andand123
+    
+  redis:
+    image: redis:latest
+    container_name: redis
+    command: >
+      redis-server --port 6379 --appendonly yes
+    ports:
+      - 6379:6379

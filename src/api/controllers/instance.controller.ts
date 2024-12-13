@@ -357,6 +357,10 @@ export class InstanceController {
     };
   }
 
+  public async instanceProfile({ instanceName }: InstanceDto) {
+    return this.waMonitor.instanceProfile(instanceName);
+  }
+
   public async fetchInstances({ instanceName, instanceId, number }: InstanceDto, key: string) {
     const env = this.configService.get<Auth>('AUTHENTICATION').API_KEY;
 

@@ -22,15 +22,21 @@ export class SqsController extends EventController implements EventControllerInt
     new Promise<void>((resolve) => {
       const awsConfig = configService.get<Sqs>('SQS');
 
-      this.sqs = new SQS({
-        credentials: {
-          accessKeyId: awsConfig.ACCESS_KEY_ID,
-          secretAccessKey: awsConfig.SECRET_ACCESS_KEY,
-        },
+      if (awsConfig.DEV_QUEUE_URL) {
+        this.sqs = new SQS({
+          endpoint: awsConfig.DEV_QUEUE_URL,
+          region: awsConfig.REGION,
+        });
+      } else {
+        this.sqs = new SQS({
+          credentials: {
+            accessKeyId: awsConfig.ACCESS_KEY_ID,
+            secretAccessKey: awsConfig.SECRET_ACCESS_KEY,
+          },
 
-        region: awsConfig.REGION,
-      });
-
+          region: awsConfig.REGION,
+        });
+      }
       this.logger.info('SQS initialized');
 
       resolve();
@@ -67,9 +73,20 @@ export class SqsController extends EventController implements EventControllerInt
       if (this.sqs) {
         if (Array.isArray(sqsLocal) && sqsLocal.includes(we)) {
           const eventFormatted = `${event.replace('.', '_').toLowerCase()}`;
-          const queueName = `${instanceName}_${eventFormatted}.fifo`;
           const sqsConfig = configService.get<Sqs>('SQS');
-          const sqsUrl = `https://sqs.${sqsConfig.REGION}.amazonaws.com/${sqsConfig.ACCOUNT_ID}/${queueName}`;
+          let queueName;
+
+          if (sqsConfig.GLOBAL_QUEUE_NAME) {
+            queueName = `${sqsConfig.GLOBAL_QUEUE_NAME}_${eventFormatted}.fifo`;
+          } else {
+            queueName = `${instanceName}_${eventFormatted}.fifo`;
+          }
+
+          let sqsUrl = `https://sqs.${sqsConfig.REGION}.amazonaws.com/${sqsConfig.ACCOUNT_ID}/${queueName}`;
+
+          if (sqsConfig.DEV_QUEUE_URL) {
+            sqsUrl = `${sqsConfig.DEV_QUEUE_URL}/queue/${queueName}`;
+          }
 
           const message = {
             event,
@@ -83,7 +100,7 @@ export class SqsController extends EventController implements EventControllerInt
 
           const params = {
             MessageBody: JSON.stringify(message),
-            MessageGroupId: 'evolution',
+            MessageGroupId: `${instanceName}_${eventFormatted}`,
             MessageDeduplicationId: `${instanceName}_${eventFormatted}_${Date.now()}`,
             QueueUrl: sqsUrl,
           };

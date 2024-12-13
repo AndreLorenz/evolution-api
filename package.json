@@ -9,6 +9,7 @@
     "start": "tsnd -r tsconfig-paths/register --files --transpile-only ./src/main.ts",
     "start:prod": "node dist/main",
     "dev:server": "tsnd -r tsconfig-paths/register --files --transpile-only --respawn --ignore-watch node_modules ./src/main.ts",
+    "dev:server:debug": "tsnd -r tsconfig-paths/register --files --transpile-only --respawn --inspect=4321 --ignore-watch node_modules ./src/main.ts",
     "test": "tsnd -r tsconfig-paths/register --files --transpile-only --respawn --ignore-watch node_modules ./test/all.test.ts",
     "lint": "eslint --fix --ext .ts src",
     "db:generate": "node runWithProvider.js \"npx prisma generate --schema ./prisma/DATABASE_PROVIDER-schema.prisma\"",

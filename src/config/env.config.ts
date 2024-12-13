@@ -101,10 +101,12 @@ export type Rabbitmq = {
 
 export type Sqs = {
   ENABLED: boolean;
+  GLOBAL_QUEUE_NAME: string;
   ACCESS_KEY_ID: string;
   SECRET_ACCESS_KEY: string;
   ACCOUNT_ID: string;
   REGION: string;
+  DEV_QUEUE_URL: string;
 };
 
 export type Websocket = {
@@ -389,10 +391,12 @@ export class ConfigService {
       },
       SQS: {
         ENABLED: process.env?.SQS_ENABLED === 'true',
+        GLOBAL_QUEUE_NAME: process.env.SQS_GLOBAL_QUEUE_NAME || '',
         ACCESS_KEY_ID: process.env.SQS_ACCESS_KEY_ID || '',
         SECRET_ACCESS_KEY: process.env.SQS_SECRET_ACCESS_KEY || '',
         ACCOUNT_ID: process.env.SQS_ACCOUNT_ID || '',
         REGION: process.env.SQS_REGION || '',
+        DEV_QUEUE_URL: process.env.SQS_DEV_QUEUE_URL || '',
       },
       WEBSOCKET: {
         ENABLED: process.env?.WEBSOCKET_ENABLED === 'true',
