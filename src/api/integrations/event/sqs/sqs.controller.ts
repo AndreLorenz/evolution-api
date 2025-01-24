@@ -100,7 +100,7 @@ export class SqsController extends EventController implements EventControllerInt
 
           const params = {
             MessageBody: JSON.stringify(message),
-            MessageGroupId: `${instanceName}_${eventFormatted}`,
+            MessageGroupId: `${instanceName}_${eventFormatted}_${Date.now()}`,
             MessageDeduplicationId: `${instanceName}_${eventFormatted}_${Date.now()}`,
             QueueUrl: sqsUrl,
           };

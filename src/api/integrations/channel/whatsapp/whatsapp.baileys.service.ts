@@ -235,9 +235,21 @@ export class BaileysStartupService extends ChannelStartupService {
   }
 
   public async logoutInstance() {
-    await this.client?.logout('Log out instance: ' + this.instanceName);
+    try {
+      await this.client?.logout('Log out instance: ' + this.instanceName);
 
-    this.client?.ws?.close();
+      this.client?.ws?.close();
+    } catch (error) {
+      if (error?.output?.statusCode === 428) {
+        if (['connecting', 'open'].includes(this.connectionStatus.state)) {
+          await this.connectionUpdate({ connection: 'close', lastDisconnect: error });
+        } else {
+          throw error;
+        }
+      } else {
+        throw error;
+      }
+    }
 
     const sessionExists = await this.prismaRepository.session.findFirst({
       where: { sessionId: this.instanceId },
@@ -270,7 +282,7 @@ export class BaileysStartupService extends ChannelStartupService {
   public async getProfileStatus() {
     const status = await this.client.fetchStatus(this.instance.wuid);
 
-    return status?.status;
+    return status;
   }
 
   public get profilePictureUrl() {
@@ -1785,7 +1797,7 @@ export class BaileysStartupService extends ChannelStartupService {
     try {
       return {
         wuid: jid,
-        status: (await this.client.fetchStatus(jid))?.status,
+        status: await this.client.fetchStatus(jid),
       };
     } catch (error) {
       return {
@@ -4309,6 +4321,9 @@ export class BaileysStartupService extends ChannelStartupService {
   }
 
   private async updateChatUnreadMessages(remoteJid: string): Promise<number> {
+    // Desabilitar a atualização de mensagens não lidas
+    if (remoteJid) return null;
+
     const [chat, unreadMessages] = await Promise.all([
       this.prismaRepository.chat.findFirst({ where: { remoteJid } }),
       this.prismaRepository.message.count({

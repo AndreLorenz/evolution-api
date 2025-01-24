@@ -403,11 +403,11 @@ export class InstanceController {
     }
 
     try {
-      this.waMonitor.waInstances[instanceName]?.logoutInstance();
+      await this.waMonitor.waInstances[instanceName]?.logoutInstance();
 
       return { status: 'SUCCESS', error: false, response: { message: 'Instance logged out' } };
     } catch (error) {
-      throw new InternalServerErrorException(error.toString());
+      throw new InternalServerErrorException(error);
     }
   }
 
@@ -437,7 +437,7 @@ export class InstanceController {
       this.eventEmitter.emit('remove.instance', instanceName, 'inner');
       return { status: 'SUCCESS', error: false, response: { message: 'Instance deleted' } };
     } catch (error) {
-      throw new BadRequestException(error.toString());
+      throw new BadRequestException(error);
     }
   }
 }

@@ -275,6 +275,7 @@ export class WAMonitoringService {
     await instance.connectToWhatsapp();
 
     this.waInstances[instanceData.instanceName] = instance;
+    this.delInstanceTime(instance.instanceName);
   }
 
   private async loadInstancesFromRedis() {
