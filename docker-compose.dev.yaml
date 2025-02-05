@@ -1,16 +1,18 @@
 services:
-  api:
-    container_name: evolution_api
-    image: evolution/api:local
-    build: .
+  postgres:
+    image: postgres
     restart: always
     ports:
-      - 8080:8080
-    volumes:
-      - evolution_instances:/evolution/instances
-    env_file:
-      - .env
-
-volumes:
-  evolution_instances:
-
+      - '5438:5432'
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=andand123
+    
+  redis:
+    image: redis:latest
+    restart: always
+    container_name: redis
+    command: >
+      redis-server --port 6379 --appendonly yes
+    ports:
+      - 6379:6379
