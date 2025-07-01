@@ -233,6 +233,9 @@ export class BaileysStartupService extends ChannelStartupService {
   private endSession = false;
   private logBaileys = this.configService.get<Log>('LOG').BAILEYS;
 
+  private static readonly connectionUpdateTimeouts: Map<string, NodeJS.Timeout> = new Map();
+  private static readonly connectionUpdateData: Map<string, any> = new Map();
+
   public stateConnection: wa.StateConnection = { state: 'close' };
 
   public phoneNumber: string;
@@ -297,6 +300,27 @@ export class BaileysStartupService extends ChannelStartupService {
     };
   }
 
+  private debouncedConnectionUpdateWebhook(data: any) {
+    const instanceName = this.instance.name;
+
+    if (BaileysStartupService.connectionUpdateTimeouts.has(instanceName)) {
+      clearTimeout(BaileysStartupService.connectionUpdateTimeouts.get(instanceName));
+    }
+
+    BaileysStartupService.connectionUpdateData.set(instanceName, data);
+
+    const timeout = setTimeout(() => {
+      const storedData = BaileysStartupService.connectionUpdateData.get(instanceName);
+      if (storedData) {
+        this.sendDataWebhook(Events.CONNECTION_UPDATE, storedData);
+        BaileysStartupService.connectionUpdateData.delete(instanceName);
+      }
+      BaileysStartupService.connectionUpdateTimeouts.delete(instanceName);
+    }, 30000);
+
+    BaileysStartupService.connectionUpdateTimeouts.set(instanceName, timeout);
+  }
+
   private async connectionUpdate({ qr, connection, lastDisconnect }: Partial<ConnectionState>) {
     if (qr) {
       if (this.instance.qrcode.count === this.configService.get<QrCode>('QRCODE').LIMIT) {
@@ -313,7 +337,7 @@ export class BaileysStartupService extends ChannelStartupService {
           );
         }
 
-        this.sendDataWebhook(Events.CONNECTION_UPDATE, {
+        this.debouncedConnectionUpdateWebhook({
           instance: this.instance.name,
           state: 'refused',
           statusReason: DisconnectReason.connectionClosed,
@@ -426,7 +450,7 @@ export class BaileysStartupService extends ChannelStartupService {
         this.client?.ws?.close();
         this.client.end(new Error('Close connection'));
 
-        this.sendDataWebhook(Events.CONNECTION_UPDATE, { instance: this.instance.name, ...this.stateConnection });
+        this.debouncedConnectionUpdateWebhook({ instance: this.instance.name, ...this.stateConnection });
       }
     }
 
@@ -472,7 +496,7 @@ export class BaileysStartupService extends ChannelStartupService {
         this.syncChatwootLostMessages();
       }
 
-      this.sendDataWebhook(Events.CONNECTION_UPDATE, {
+      this.debouncedConnectionUpdateWebhook({
         instance: this.instance.name,
         wuid: this.instance.wuid,
         profileName: await this.getProfileName(),
@@ -482,7 +506,7 @@ export class BaileysStartupService extends ChannelStartupService {
     }
 
     if (connection === 'connecting') {
-      this.sendDataWebhook(Events.CONNECTION_UPDATE, { instance: this.instance.name, ...this.stateConnection });
+      this.debouncedConnectionUpdateWebhook({ instance: this.instance.name, ...this.stateConnection });
     }
   }
 

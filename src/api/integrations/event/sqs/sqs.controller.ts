@@ -24,16 +24,10 @@ export class SqsController extends EventController implements EventControllerInt
       const awsConfig = configService.get<Sqs>('SQS');
 
       if (awsConfig.DEV_QUEUE_URL) {
-        this.sqs = new SQS({
-          endpoint: awsConfig.DEV_QUEUE_URL,
-          region: awsConfig.REGION,
-        });
+        this.sqs = new SQS({ endpoint: awsConfig.DEV_QUEUE_URL, region: awsConfig.REGION });
       } else {
         this.sqs = new SQS({
-          credentials: {
-            accessKeyId: awsConfig.ACCESS_KEY_ID,
-            secretAccessKey: awsConfig.SECRET_ACCESS_KEY,
-          },
+          credentials: { accessKeyId: awsConfig.ACCESS_KEY_ID, secretAccessKey: awsConfig.SECRET_ACCESS_KEY },
 
           region: awsConfig.REGION,
         });
@@ -53,6 +47,12 @@ export class SqsController extends EventController implements EventControllerInt
   }
 
   override async set(instanceName: string, data: EventDto): Promise<any> {
+    const awsConfig = configService.get<Sqs>('SQS');
+
+    if (awsConfig.GLOBAL_QUEUE_NAME) {
+      return;
+    }
+
     if (!this.status) {
       return;
     }
@@ -68,13 +68,8 @@ export class SqsController extends EventController implements EventControllerInt
     await this.saveQueues(instanceName, data[this.name].events, data[this.name]?.enabled);
 
     const payload: any = {
-      where: {
-        instanceId: this.monitor.waInstances[instanceName].instanceId,
-      },
-      update: {
-        enabled: data[this.name]?.enabled,
-        events: data[this.name].events,
-      },
+      where: { instanceId: this.monitor.waInstances[instanceName].instanceId },
+      update: { enabled: data[this.name]?.enabled, events: data[this.name].events },
       create: {
         enabled: data[this.name]?.enabled,
         events: data[this.name].events,
@@ -107,6 +102,8 @@ export class SqsController extends EventController implements EventControllerInt
     const instanceSqs = await this.get(instanceName);
     const sqsLocal = instanceSqs?.events;
     const we = event.replace(/[.-]/gm, '_').toUpperCase();
+
+    console.log(event);
 
     if (instanceSqs?.enabled) {
       if (this.sqs) {
@@ -158,10 +155,7 @@ export class SqsController extends EventController implements EventControllerInt
               });
             } else {
               if (configService.get<Log>('LOG').LEVEL.includes('WEBHOOKS')) {
-                const logData = {
-                  local: `${origin}.sendData-SQS`,
-                  ...message,
-                };
+                const logData = { local: `${origin}.sendData-SQS`, ...message };
 
                 this.logger.log(logData);
               }
@@ -188,12 +182,7 @@ export class SqsController extends EventController implements EventControllerInt
         const queueName = `${instanceName}_${normalizedEvent}.fifo`;
 
         try {
-          const createCommand = new CreateQueueCommand({
-            QueueName: queueName,
-            Attributes: {
-              FifoQueue: 'true',
-            },
-          });
+          const createCommand = new CreateQueueCommand({ QueueName: queueName, Attributes: { FifoQueue: 'true' } });
           const data = await this.sqs.send(createCommand);
           this.logger.info(`Queue ${queueName} criada: ${data.QueueUrl}`);
         } catch (err: any) {
@@ -206,9 +195,7 @@ export class SqsController extends EventController implements EventControllerInt
   private async listQueuesByInstance(instanceName: string) {
     let existingQueues: string[] = [];
     try {
-      const listCommand = new ListQueuesCommand({
-        QueueNamePrefix: `${instanceName}_`,
-      });
+      const listCommand = new ListQueuesCommand({ QueueNamePrefix: `${instanceName}_` });
       const listData = await this.sqs.send(listCommand);
       if (listData.QueueUrls && listData.QueueUrls.length > 0) {
         // Extrai o nome da fila a partir da URL
@@ -237,9 +224,7 @@ export class SqsController extends EventController implements EventControllerInt
   // Para uma futura feature de exclusão forçada das queues
   private async removeQueuesByInstance(instanceName: string) {
     try {
-      const listCommand = new ListQueuesCommand({
-        QueueNamePrefix: `${instanceName}_`,
-      });
+      const listCommand = new ListQueuesCommand({ QueueNamePrefix: `${instanceName}_` });
       const listData = await this.sqs.send(listCommand);
 
       if (!listData.QueueUrls || listData.QueueUrls.length === 0) {
