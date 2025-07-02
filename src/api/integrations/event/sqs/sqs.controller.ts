@@ -49,10 +49,6 @@ export class SqsController extends EventController implements EventControllerInt
   override async set(instanceName: string, data: EventDto): Promise<any> {
     const awsConfig = configService.get<Sqs>('SQS');
 
-    if (awsConfig.GLOBAL_QUEUE_NAME) {
-      return;
-    }
-
     if (!this.status) {
       return;
     }
@@ -65,7 +61,9 @@ export class SqsController extends EventController implements EventControllerInt
       }
     }
 
-    await this.saveQueues(instanceName, data[this.name].events, data[this.name]?.enabled);
+    if (!awsConfig.GLOBAL_QUEUE_NAME) {
+      await this.saveQueues(instanceName, data[this.name].events, data[this.name]?.enabled);
+    }
 
     const payload: any = {
       where: { instanceId: this.monitor.waInstances[instanceName].instanceId },
@@ -102,6 +100,8 @@ export class SqsController extends EventController implements EventControllerInt
     const instanceSqs = await this.get(instanceName);
     const sqsLocal = instanceSqs?.events;
     const we = event.replace(/[.-]/gm, '_').toUpperCase();
+
+    console.log(event);
 
     if (instanceSqs?.enabled) {
       if (this.sqs) {
