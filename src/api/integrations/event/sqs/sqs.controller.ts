@@ -103,8 +103,6 @@ export class SqsController extends EventController implements EventControllerInt
     const sqsLocal = instanceSqs?.events;
     const we = event.replace(/[.-]/gm, '_').toUpperCase();
 
-    console.log(event);
-
     if (instanceSqs?.enabled) {
       if (this.sqs) {
         if (Array.isArray(sqsLocal) && sqsLocal.includes(we)) {
