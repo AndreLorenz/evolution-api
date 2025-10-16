@@ -1,7 +1,8 @@
+import * as s3Service from '@api/integrations/storage/s3/libs/minio.server';
 import { PrismaRepository } from '@api/repository/repository.service';
 import { WAMonitoringService } from '@api/services/monitor.service';
 import { CreateQueueCommand, DeleteQueueCommand, ListQueuesCommand, SQS } from '@aws-sdk/client-sqs';
-import { configService, Log, Sqs } from '@config/env.config';
+import { configService, HttpServer, Log, S3, Sqs } from '@config/env.config';
 import { Logger } from '@config/logger.config';
 
 import { EmitData, EventController, EventControllerInterface } from '../event.controller';
@@ -15,27 +16,29 @@ export class SqsController extends EventController implements EventControllerInt
     super(prismaRepository, waMonitor, configService.get<Sqs>('SQS')?.ENABLED, 'sqs');
   }
 
-  public init(): void {
+  public async init(): Promise<void> {
     if (!this.status) {
       return;
     }
 
-    new Promise<void>((resolve) => {
-      const awsConfig = configService.get<Sqs>('SQS');
+    const awsConfig = configService.get<Sqs>('SQS');
 
-      if (awsConfig.DEV_QUEUE_URL) {
-        this.sqs = new SQS({ endpoint: awsConfig.DEV_QUEUE_URL, region: awsConfig.REGION });
-      } else {
-        this.sqs = new SQS({
-          credentials: { accessKeyId: awsConfig.ACCESS_KEY_ID, secretAccessKey: awsConfig.SECRET_ACCESS_KEY },
+    if (awsConfig.DEV_QUEUE_URL) {
+      this.sqs = new SQS({ endpoint: awsConfig.DEV_QUEUE_URL, region: awsConfig.REGION });
+    } else {
+      this.sqs = new SQS({
+        credentials: { accessKeyId: awsConfig.ACCESS_KEY_ID, secretAccessKey: awsConfig.SECRET_ACCESS_KEY },
 
-          region: awsConfig.REGION,
-        });
-      }
-      this.logger.info('SQS initialized');
+        region: awsConfig.REGION,
+      });
+    }
+    this.logger.info('SQS initialized');
 
-      resolve();
-    });
+    const sqsConfig = configService.get<Sqs>('SQS');
+    if (this.sqs && sqsConfig.GLOBAL_ENABLED) {
+      const sqsEvents = Object.keys(sqsConfig.EVENTS).filter((e) => sqsConfig.EVENTS[e]);
+      await this.saveQueues(sqsConfig.GLOBAL_PREFIX_NAME, sqsEvents, true);
+    }
   }
 
   private set channel(sqs: SQS) {
@@ -47,9 +50,7 @@ export class SqsController extends EventController implements EventControllerInt
   }
 
   override async set(instanceName: string, data: EventDto): Promise<any> {
-    const awsConfig = configService.get<Sqs>('SQS');
-
-    if (!this.status) {
+    if (!this.status || configService.get<Sqs>('SQS').GLOBAL_ENABLED) {
       return;
     }
 
@@ -61,10 +62,6 @@ export class SqsController extends EventController implements EventControllerInt
       }
     }
 
-    if (!awsConfig.GLOBAL_QUEUE_NAME) {
-      await this.saveQueues(instanceName, data[this.name].events, data[this.name]?.enabled);
-    }
-
     const payload: any = {
       where: { instanceId: this.monitor.waInstances[instanceName].instanceId },
       update: { enabled: data[this.name]?.enabled, events: data[this.name].events },
@@ -74,6 +71,7 @@ export class SqsController extends EventController implements EventControllerInt
         instanceId: this.monitor.waInstances[instanceName].instanceId,
       },
     };
+
     console.log('*** payload: ', payload);
     return this.prisma[this.name].upsert(payload);
   }
@@ -97,103 +95,153 @@ export class SqsController extends EventController implements EventControllerInt
       return;
     }
 
-    const instanceSqs = await this.get(instanceName);
-    const sqsLocal = instanceSqs?.events;
-    const we = event.replace(/[.-]/gm, '_').toUpperCase();
+    if (this.sqs) {
+      const serverConfig = configService.get<HttpServer>('SERVER');
+      const sqsConfig = configService.get<Sqs>('SQS');
 
-    console.log(event);
+      const we = event.replace(/[.-]/gm, '_').toUpperCase();
 
-    if (instanceSqs?.enabled) {
-      if (this.sqs) {
-        if (Array.isArray(sqsLocal) && sqsLocal.includes(we)) {
-          const eventFormatted = `${event.replace('.', '_').toLowerCase()}`;
-          const sqsConfig = configService.get<Sqs>('SQS');
-          let queueName;
-
-          if (sqsConfig.GLOBAL_QUEUE_NAME) {
-            queueName = `${sqsConfig.GLOBAL_QUEUE_NAME}_${eventFormatted}.fifo`;
-          } else {
-            queueName = `${instanceName}_${eventFormatted}.fifo`;
-          }
-
-          let sqsUrl = `https://sqs.${sqsConfig.REGION}.amazonaws.com/${sqsConfig.ACCOUNT_ID}/${queueName}`;
-
-          if (sqsConfig.DEV_QUEUE_URL) {
-            sqsUrl = `${sqsConfig.DEV_QUEUE_URL}/queue/${queueName}`;
-          }
-
-          const message = {
-            event,
-            instance: instanceName,
-            data,
-            server_url: serverUrl,
-            date_time: dateTime,
-            sender,
-            apikey: apiKey,
-          };
-
-          const params = {
-            MessageBody: JSON.stringify(message),
-            MessageGroupId: `${instanceName}_${eventFormatted}_${Date.now()}`,
-            MessageDeduplicationId: `${instanceName}_${eventFormatted}_${Date.now()}`,
-            QueueUrl: sqsUrl,
-          };
-
-          this.sqs.sendMessage(params, (err) => {
-            if (err) {
-              this.logger.error({
-                local: `${origin}.sendData-SQS`,
-                message: err?.message,
-                hostName: err?.hostname,
-                code: err?.code,
-                stack: err?.stack,
-                name: err?.name,
-                url: queueName,
-                server_url: serverUrl,
-              });
-            } else {
-              if (configService.get<Log>('LOG').LEVEL.includes('WEBHOOKS')) {
-                const logData = { local: `${origin}.sendData-SQS`, ...message };
-
-                this.logger.log(logData);
-              }
-            }
-          });
+      let sqsEvents = [];
+      if (sqsConfig.GLOBAL_ENABLED) {
+        sqsEvents = Object.keys(sqsConfig.EVENTS).filter((e) => sqsConfig.EVENTS[e]);
+      } else {
+        const instanceSqs = await this.get(instanceName);
+        if (instanceSqs?.enabled && Array.isArray(instanceSqs?.events)) {
+          sqsEvents = instanceSqs?.events;
         }
+      }
+
+      if (Array.isArray(sqsEvents) && sqsEvents.includes(we)) {
+        const prefixName = sqsConfig.GLOBAL_ENABLED ? sqsConfig.GLOBAL_PREFIX_NAME : instanceName;
+        const eventFormatted =
+          sqsConfig.GLOBAL_ENABLED && sqsConfig.GLOBAL_FORCE_SINGLE_QUEUE
+            ? 'singlequeue'
+            : `${event.replace('.', '_').toLowerCase()}`;
+        const queueName = `${prefixName}_${eventFormatted}.fifo`;
+        const sqsUrl = `https://sqs.${sqsConfig.REGION}.amazonaws.com/${sqsConfig.ACCOUNT_ID}/${queueName}`;
+
+        const message = {
+          event,
+          instance: instanceName,
+          dataType: 'json',
+          data,
+          server: serverConfig.NAME,
+          server_url: serverUrl,
+          date_time: dateTime,
+          sender,
+          apikey: apiKey,
+        };
+
+        const jsonStr = JSON.stringify(message);
+        const size = Buffer.byteLength(jsonStr, 'utf8');
+        if (size > sqsConfig.MAX_PAYLOAD_SIZE) {
+          if (!configService.get<S3>('S3').ENABLE) {
+            this.logger.error(
+              `${instanceName} - ${eventFormatted} - SQS ignored: payload (${size} bytes) exceeds SQS size limit (${sqsConfig.MAX_PAYLOAD_SIZE} bytes) and S3 storage is not enabled.`,
+            );
+            return;
+          }
+
+          const buffer = Buffer.from(jsonStr, 'utf8');
+          const fullName = `messages/${instanceName}_${eventFormatted}_${Date.now()}.json`;
+
+          await s3Service.uploadFile(fullName, buffer, size, {
+            'Content-Type': 'application/json',
+            'Cache-Control': 'no-store',
+          });
+
+          const fileUrl = await s3Service.getObjectUrl(fullName);
+
+          message.data = { fileUrl };
+          message.dataType = 's3';
+        }
+
+        const messageGroupId = sqsConfig.GLOBAL_ENABLED
+          ? `${serverConfig.NAME}-${eventFormatted}-${instanceName}`
+          : 'evolution';
+        const isGlobalEnabled = sqsConfig.GLOBAL_ENABLED;
+        const params = {
+          MessageBody: JSON.stringify(message),
+          MessageGroupId: messageGroupId,
+          QueueUrl: sqsUrl,
+          ...(!isGlobalEnabled && {
+            MessageDeduplicationId: `${instanceName}_${eventFormatted}_${Date.now()}`,
+          }),
+        };
+
+        this.sqs.sendMessage(params, (err) => {
+          if (err) {
+            this.logger.error({
+              local: `${origin}.sendData-SQS`,
+              params: JSON.stringify(message),
+              sqsUrl: sqsUrl,
+              message: err?.message,
+              hostName: err?.hostname,
+              code: err?.code,
+              stack: err?.stack,
+              name: err?.name,
+              url: queueName,
+              server_url: serverUrl,
+            });
+          } else if (configService.get<Log>('LOG').LEVEL.includes('WEBHOOKS')) {
+            const logData = {
+              local: `${origin}.sendData-SQS`,
+              ...message,
+            };
+
+            this.logger.log(logData);
+          }
+        });
       }
     }
   }
 
-  private async saveQueues(instanceName: string, events: string[], enable: boolean) {
+  private async saveQueues(prefixName: string, events: string[], enable: boolean) {
     if (enable) {
-      const eventsFinded = await this.listQueuesByInstance(instanceName);
+      const sqsConfig = configService.get<Sqs>('SQS');
+      const eventsFinded = await this.listQueues(prefixName);
       console.log('eventsFinded', eventsFinded);
 
       for (const event of events) {
-        const normalizedEvent = event.toLowerCase();
-
+        const normalizedEvent =
+          sqsConfig.GLOBAL_ENABLED && sqsConfig.GLOBAL_FORCE_SINGLE_QUEUE ? 'singlequeue' : event.toLowerCase();
         if (eventsFinded.includes(normalizedEvent)) {
           this.logger.info(`A queue para o evento "${normalizedEvent}" já existe. Ignorando criação.`);
           continue;
         }
 
-        const queueName = `${instanceName}_${normalizedEvent}.fifo`;
-
+        const queueName = `${prefixName}_${normalizedEvent}.fifo`;
         try {
-          const createCommand = new CreateQueueCommand({ QueueName: queueName, Attributes: { FifoQueue: 'true' } });
+          const isGlobalEnabled = sqsConfig.GLOBAL_ENABLED;
+          const createCommand = new CreateQueueCommand({
+            QueueName: queueName,
+            Attributes: {
+              FifoQueue: 'true',
+              ...(isGlobalEnabled && { ContentBasedDeduplication: 'true' }),
+            },
+          });
+
           const data = await this.sqs.send(createCommand);
           this.logger.info(`Queue ${queueName} criada: ${data.QueueUrl}`);
         } catch (err: any) {
           this.logger.error(`Erro ao criar queue ${queueName}: ${err.message}`);
         }
+
+        if (sqsConfig.GLOBAL_ENABLED && sqsConfig.GLOBAL_FORCE_SINGLE_QUEUE) {
+          break;
+        }
       }
     }
   }
 
-  private async listQueuesByInstance(instanceName: string) {
+  private async listQueues(prefixName: string) {
     let existingQueues: string[] = [];
+
     try {
-      const listCommand = new ListQueuesCommand({ QueueNamePrefix: `${instanceName}_` });
+      const listCommand = new ListQueuesCommand({
+        QueueNamePrefix: `${prefixName}_`,
+      });
+
       const listData = await this.sqs.send(listCommand);
       if (listData.QueueUrls && listData.QueueUrls.length > 0) {
         // Extrai o nome da fila a partir da URL
@@ -203,7 +251,7 @@ export class SqsController extends EventController implements EventControllerInt
         });
       }
     } catch (error: any) {
-      this.logger.error(`Erro ao listar filas para a instância ${instanceName}: ${error.message}`);
+      this.logger.error(`Erro ao listar filas para ${prefixName}: ${error.message}`);
       return;
     }
 
@@ -211,8 +259,8 @@ export class SqsController extends EventController implements EventControllerInt
     return existingQueues
       .map((queueName) => {
         // Espera-se que o nome seja `${instanceName}_${event}.fifo`
-        if (queueName.startsWith(`${instanceName}_`) && queueName.endsWith('.fifo')) {
-          return queueName.substring(instanceName.length + 1, queueName.length - 5).toLowerCase();
+        if (queueName.startsWith(`${prefixName}_`) && queueName.endsWith('.fifo')) {
+          return queueName.substring(prefixName.length + 1, queueName.length - 5).toLowerCase();
         }
         return '';
       })
@@ -220,13 +268,15 @@ export class SqsController extends EventController implements EventControllerInt
   }
 
   // Para uma futura feature de exclusão forçada das queues
-  private async removeQueuesByInstance(instanceName: string) {
+  private async removeQueuesByInstance(prefixName: string) {
     try {
-      const listCommand = new ListQueuesCommand({ QueueNamePrefix: `${instanceName}_` });
+      const listCommand = new ListQueuesCommand({
+        QueueNamePrefix: `${prefixName}_`,
+      });
       const listData = await this.sqs.send(listCommand);
 
       if (!listData.QueueUrls || listData.QueueUrls.length === 0) {
-        this.logger.info(`No queues found for instance ${instanceName}`);
+        this.logger.info(`No queues found for ${prefixName}`);
         return;
       }
 
@@ -240,7 +290,7 @@ export class SqsController extends EventController implements EventControllerInt
         }
       }
     } catch (err: any) {
-      this.logger.error(`Error listing queues for instance ${instanceName}: ${err.message}`);
+      this.logger.error(`Error listing queues for ${prefixName}: ${err.message}`);
     }
   }
 }

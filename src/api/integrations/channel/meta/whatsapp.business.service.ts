@@ -20,10 +20,11 @@ import { chatbotController } from '@api/server.module';
 import { CacheService } from '@api/services/cache.service';
 import { ChannelStartupService } from '@api/services/channel.service';
 import { Events, wa } from '@api/types/wa.types';
-import { Chatwoot, ConfigService, Database, Openai, S3, WaBusiness } from '@config/env.config';
+import { AudioConverter, Chatwoot, ConfigService, Database, Openai, S3, WaBusiness } from '@config/env.config';
 import { BadRequestException, InternalServerErrorException } from '@exceptions';
 import { createJid } from '@utils/createJid';
 import { status } from '@utils/renderStatus';
+import { sendTelemetry } from '@utils/sendTelemetry';
 import axios from 'axios';
 import { arrayUnique, isURL } from 'class-validator';
 import EventEmitter2 from 'eventemitter2';
@@ -459,6 +460,15 @@ export class BusinessStartupService extends ChannelStartupService {
                   mediaType = 'video';
                 }
 
+                if (mediaType == 'video' && !this.configService.get<S3>('S3').SAVE_VIDEO) {
+                  this.logger?.info?.('Video upload attempted but is disabled by configuration.');
+                  return {
+                    success: false,
+                    message:
+                      'Video upload is currently disabled. Please contact support if you need this feature enabled.',
+                  };
+                }
+
                 const mimetype = result.data?.mime_type || result.headers['content-type'];
 
                 const contentDisposition = result.headers['content-disposition'];
@@ -645,6 +655,8 @@ export class BusinessStartupService extends ChannelStartupService {
         }
 
         this.logger.log(messageRaw);
+
+        sendTelemetry(`received.message.${messageRaw.messageType ?? 'unknown'}`);
 
         this.sendDataWebhook(Events.MESSAGES_UPSERT, messageRaw);
 
@@ -1291,7 +1303,8 @@ export class BusinessStartupService extends ChannelStartupService {
     number = number.replace(/\D/g, '');
     const hash = `${number}-${new Date().getTime()}`;
 
-    if (process.env.API_AUDIO_CONVERTER) {
+    const audioConverterConfig = this.configService.get<AudioConverter>('AUDIO_CONVERTER');
+    if (audioConverterConfig.API_URL) {
       this.logger.verbose('Using audio converter API');
       const formData = new FormData();
 
@@ -1308,10 +1321,10 @@ export class BusinessStartupService extends ChannelStartupService {
 
       formData.append('format', 'mp3');
 
-      const response = await axios.post(process.env.API_AUDIO_CONVERTER, formData, {
+      const response = await axios.post(audioConverterConfig.API_URL, formData, {
         headers: {
           ...formData.getHeaders(),
-          apikey: process.env.API_AUDIO_CONVERTER_KEY,
+          apikey: audioConverterConfig.API_KEY,
         },
       });
 
