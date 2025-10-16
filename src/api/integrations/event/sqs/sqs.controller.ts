@@ -159,14 +159,11 @@ export class SqsController extends EventController implements EventControllerInt
         const messageGroupId = sqsConfig.GLOBAL_ENABLED
           ? `${serverConfig.NAME}-${eventFormatted}-${instanceName}`
           : 'evolution';
-        const isGlobalEnabled = sqsConfig.GLOBAL_ENABLED;
         const params = {
           MessageBody: JSON.stringify(message),
           MessageGroupId: messageGroupId,
           QueueUrl: sqsUrl,
-          ...(!isGlobalEnabled && {
-            MessageDeduplicationId: `${instanceName}_${eventFormatted}_${Date.now()}`,
-          }),
+          MessageDeduplicationId: `${instanceName}_${eventFormatted}_${Date.now()}`,
         };
 
         this.sqs.sendMessage(params, (err) => {
