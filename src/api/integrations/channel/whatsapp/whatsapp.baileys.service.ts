@@ -2274,11 +2274,7 @@ export class BaileysStartupService extends ChannelStartupService {
           mentionedJid: [],
           groupMentions: [],
           //expiration: 7776000,
-          ephemeralSettingTimestamp: {
-            low: Math.floor(Date.now() / 1000) - 172800,
-            high: 0,
-            unsigned: false,
-          },
+          ephemeralSettingTimestamp: Long.fromNumber(Math.floor(Date.now() / 1000) - 172800),
           disappearingMode: { initiator: 0 },
         };
         messageSent = await this.sendMessage(
