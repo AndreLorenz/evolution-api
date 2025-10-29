@@ -14,9 +14,8 @@ function getAvailableNumbers(remoteJid: string) {
 
   const [number, domain] = remoteJid.split('@');
 
-  // TODO: Se já for @lid, retornar apenas ele mesmo SEM adicionar @domain novamente
   if (domain === 'lid' || domain === 'g.us') {
-    return [remoteJid]; // Retorna direto para @lid e @g.us
+    return [remoteJid];
   }
 
   // Brazilian numbers
@@ -28,9 +27,7 @@ function getAvailableNumbers(remoteJid: string) {
     numbersAvailable.push(numberWithDigit);
     numbersAvailable.push(numberWithoutDigit);
   }
-
   // Mexican/Argentina numbers
-  // Ref: https://faq.whatsapp.com/1294841057948784
   else if (number.startsWith('52') || number.startsWith('54')) {
     let prefix = '';
     if (number.startsWith('52')) {
@@ -49,13 +46,11 @@ function getAvailableNumbers(remoteJid: string) {
     numbersAvailable.push(numberWithDigit);
     numbersAvailable.push(numberWithoutDigit);
   }
-
   // Other countries
   else {
     numbersAvailable.push(remoteJid);
   }
 
-  // TODO: Adiciona @domain apenas para números que não são @lid
   return numbersAvailable.map((number) => `${number}@${domain}`);
 }
 
@@ -66,76 +61,98 @@ interface ISaveOnWhatsappCacheParams {
 }
 
 export async function saveOnWhatsappCache(data: ISaveOnWhatsappCacheParams[]) {
-  if (configService.get<Database>('DATABASE').SAVE_DATA.IS_ON_WHATSAPP) {
-    for (const item of data) {
-      const remoteJid = item.remoteJid.startsWith('+') ? item.remoteJid.slice(1) : item.remoteJid;
+  if (!configService.get<Database>('DATABASE').SAVE_DATA.IS_ON_WHATSAPP) return;
 
-      // TODO: Buscar registro existente PRIMEIRO para preservar dados
-      const allJids = [remoteJid];
+  for (const item of data) {
+    const remoteJid = item.remoteJid.startsWith('+') ? item.remoteJid.slice(1) : item.remoteJid;
+    const allJids = [remoteJid];
 
-      const altJid =
-        item.remoteJidAlt && item.remoteJidAlt.includes('@lid')
-          ? item.remoteJidAlt.startsWith('+')
-            ? item.remoteJidAlt.slice(1)
-            : item.remoteJidAlt
-          : null;
+    const altJid =
+      item.remoteJidAlt && item.remoteJidAlt.includes('@lid')
+        ? item.remoteJidAlt.startsWith('+')
+          ? item.remoteJidAlt.slice(1)
+          : item.remoteJidAlt
+        : null;
 
-      if (altJid) {
-        allJids.push(altJid);
-      }
+    if (altJid) {
+      allJids.push(altJid);
+    }
 
-      const expandedJids = allJids.flatMap((jid) => getAvailableNumbers(jid));
+    const expandedJids = allJids.flatMap((jid) => getAvailableNumbers(jid));
+    const uniqueJids = Array.from(new Set(expandedJids));
 
-      const existingRecord = await prismaRepository.isOnWhatsapp.findFirst({
-        where: {
-          OR: expandedJids.map((jid) => ({ jidOptions: { contains: jid } })),
+    // 🎯 NOVA LÓGICA: Busca por variação em vez de LIKE
+    const existingVariation = await prismaRepository.whatsappJidVariation.findFirst({
+      where: {
+        jidVariation: {
+          in: uniqueJids,
+        },
+      },
+      include: {
+        contact: {
+          include: {
+            variations: true,
+          },
+        },
+      },
+    });
+
+    const existingContact = existingVariation?.contact;
+
+    logger.verbose(`Register exists: ${existingContact ? existingContact.remoteJid : 'not found'}`);
+
+    const lidValue = item.lid === 'lid' || item.remoteJid?.includes('@lid') ? 'lid' : null;
+
+    if (existingContact) {
+      // Atualiza contato existente
+      await prismaRepository.whatsappContact.update({
+        where: { id: existingContact.id },
+        data: {
+          remoteJid,
+          lid: lidValue,
+          updatedAt: new Date(),
         },
       });
 
-      logger.verbose(`Register exists: ${existingRecord ? existingRecord.remoteJid : 'não not found'}`);
+      // Pega variações existentes
+      const existingVariations = new Set(existingContact.variations.map((v) => v.jidVariation));
 
-      const finalJidOptions = [...expandedJids];
+      // Identifica novas variações
+      const newVariations = uniqueJids.filter((jid) => !existingVariations.has(jid));
 
-      if (existingRecord?.jidOptions) {
-        const existingJids = existingRecord.jidOptions.split(',');
-        // TODO: Adicionar JIDs existentes que não estão na lista atual
-        existingJids.forEach((jid) => {
-          if (!finalJidOptions.includes(jid)) {
-            finalJidOptions.push(jid);
-          }
+      // Insere apenas as novas
+      if (newVariations.length > 0) {
+        await prismaRepository.whatsappJidVariation.createMany({
+          data: newVariations.map((jid) => ({
+            contactId: existingContact.id,
+            jidVariation: jid,
+          })),
+          skipDuplicates: true,
         });
+
+        logger.verbose(`Added ${newVariations.length} new variations for ${remoteJid}`);
       }
-
-      // TODO: Se tiver remoteJidAlt com @lid novo, adicionar
-      if (altJid && !finalJidOptions.includes(altJid)) {
-        finalJidOptions.push(altJid);
-      }
-
-      const uniqueNumbers = Array.from(new Set(finalJidOptions));
-
-      logger.verbose(
-        `Saving: remoteJid=${remoteJid}, jidOptions=${uniqueNumbers.join(',')}, lid=${item.lid === 'lid' || item.remoteJid?.includes('@lid') ? 'lid' : null}`,
-      );
-
-      if (existingRecord) {
-        await prismaRepository.isOnWhatsapp.update({
-          where: { id: existingRecord.id },
-          data: {
-            remoteJid: remoteJid,
-            jidOptions: uniqueNumbers.join(','),
-            lid: item.lid === 'lid' || item.remoteJid?.includes('@lid') ? 'lid' : null,
+    } else {
+      // Cria novo contato com todas as variações
+      await prismaRepository.whatsappContact.create({
+        data: {
+          remoteJid,
+          lid: lidValue,
+          variations: {
+            createMany: {
+              data: uniqueJids.map((jid) => ({
+                jidVariation: jid,
+              })),
+              skipDuplicates: true,
+            },
           },
-        });
-      } else {
-        await prismaRepository.isOnWhatsapp.create({
-          data: {
-            remoteJid: remoteJid,
-            jidOptions: uniqueNumbers.join(','),
-            lid: item.lid === 'lid' || item.remoteJid?.includes('@lid') ? 'lid' : null,
-          },
-        });
-      }
+        },
+      });
+
+      logger.verbose(`Created new contact: ${remoteJid} with ${uniqueJids.length} variations`);
     }
+
+    logger.verbose(`Saving: remoteJid=${remoteJid}, variations=${uniqueJids.length}, lid=${lidValue}`);
   }
 }
 
@@ -147,25 +164,42 @@ export async function getOnWhatsappCache(remoteJids: string[]) {
     lid?: string;
   }[] = [];
 
-  if (configService.get<Database>('DATABASE').SAVE_DATA.IS_ON_WHATSAPP) {
-    const remoteJidsWithoutPlus = remoteJids.map((remoteJid) => getAvailableNumbers(remoteJid)).flat();
+  if (!configService.get<Database>('DATABASE').SAVE_DATA.IS_ON_WHATSAPP) {
+    return results;
+  }
 
-    const onWhatsappCache = await prismaRepository.isOnWhatsapp.findMany({
-      where: {
-        OR: remoteJidsWithoutPlus.map((remoteJid) => ({ jidOptions: { contains: remoteJid } })),
-        updatedAt: {
-          gte: dayjs().subtract(configService.get<Database>('DATABASE').SAVE_DATA.IS_ON_WHATSAPP_DAYS, 'days').toDate(),
+  const remoteJidsExpanded = remoteJids.map((remoteJid) => getAvailableNumbers(remoteJid)).flat();
+  const uniqueJids = Array.from(new Set(remoteJidsExpanded));
+
+  const dateLimit = dayjs()
+    .subtract(configService.get<Database>('DATABASE').SAVE_DATA.IS_ON_WHATSAPP_DAYS, 'days')
+    .toDate();
+
+  // 🎯 NOVA LÓGICA: Busca direta por índice
+  const contacts = await prismaRepository.whatsappContact.findMany({
+    where: {
+      variations: {
+        some: {
+          jidVariation: {
+            in: uniqueJids,
+          },
         },
       },
-    });
+      updatedAt: {
+        gte: dateLimit,
+      },
+    },
+    include: {
+      variations: true,
+    },
+  });
 
-    results = onWhatsappCache.map((item) => ({
-      remoteJid: item.remoteJid,
-      number: item.remoteJid.split('@')[0],
-      jidOptions: item.jidOptions.split(','),
-      lid: item.lid,
-    }));
-  }
+  results = contacts.map((contact) => ({
+    remoteJid: contact.remoteJid,
+    number: contact.remoteJid.split('@')[0],
+    jidOptions: contact.variations.map((v) => v.jidVariation),
+    lid: contact.lid,
+  }));
 
   return results;
 }
