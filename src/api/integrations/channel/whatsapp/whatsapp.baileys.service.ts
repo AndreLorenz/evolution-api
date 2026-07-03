@@ -92,6 +92,7 @@ import { useMultiFileAuthStateRedisDb } from '@utils/use-multi-file-auth-state-r
 import axios from 'axios';
 import makeWASocket, {
   AnyMessageContent,
+  BinaryNode,
   BufferedEventData,
   BufferJSON,
   CacheStore,
@@ -749,6 +750,25 @@ export class BaileysStartupService extends ChannelStartupService {
       const payload = { event: 'CB:ack,class:call', packet: packet };
       this.sendDataWebhook(Events.CALL, payload, true, ['websocket']);
     });
+
+    for (const passkeyNotificationType of ['passkey_prologue_request', 'crsc_continuation']) {
+      this.client.ws.on(`CB:notification,type:${passkeyNotificationType}`, async (notificationNode: BinaryNode) => {
+        try {
+          await this.client.sendNode({
+            tag: 'ack',
+            attrs: {
+              id: notificationNode.attrs.id,
+              class: 'notification',
+              to: notificationNode.attrs.from,
+              type: notificationNode.attrs.type,
+            },
+          });
+          console.log(`🔑 ${this.phoneNumber} ACKed ${passkeyNotificationType} (passkey pairing flow)`);
+        } catch (ackError) {
+          console.error(`❌ ${this.phoneNumber} failed to ACK ${passkeyNotificationType}:`, ackError);
+        }
+      });
+    }
 
     this.phoneNumber = number;
 
