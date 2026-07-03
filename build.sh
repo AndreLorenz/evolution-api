@@ -1,6 +1,7 @@
 #!/bin/bash
 
 # Script para build do Docker com SSH Agent
+# chmod +x build.sh
 # Uso: ./build.sh <nome-da-imagem>
 # Exemplo: ./build.sh uno/evolution-test
 # Exemplo: ./build.sh uno/evolution

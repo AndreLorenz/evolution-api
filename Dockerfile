@@ -19,10 +19,11 @@ RUN --mount=type=ssh,id=default \
     git config --global url."git@github.com:".insteadOf https://github.com/
 
 COPY ./package*.json ./
+COPY ./patches ./patches
 COPY ./tsconfig.json ./
 COPY ./tsup.config.ts ./
 
-RUN --mount=type=ssh,id=default npm install
+RUN --mount=type=ssh,id=default npm ci
 
 COPY ./src ./src
 COPY ./public ./public
